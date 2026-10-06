@@ -1,8 +1,10 @@
 package software.amazon.smithy.intellij
 
 import com.intellij.lang.annotation.HighlightSeverity
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Test
+import software.amazon.smithy.intellij.psi.SmithyTaggedString
 
 /**
  * Tests for [SmithyAnnotator] behavior related to IDL 2.1 tagged string literals.
@@ -32,6 +34,27 @@ class SmithyTaggedLiteralAnnotatorTest : BasePlatformTestCase() {
             "expected tagged-literal version error, got: $errors",
             errors.any { it.contains("Tagged string literals require") }
         )
+    }
+
+    @Test
+    fun testTagRecognizedWithMultipleSpacesAndTabs() {
+        //Smithy's [SP] after the tag is one-or-more spaces/tabs; all of these must tokenize as a tagged literal (proven
+        //by the version error, which only fires when #re is recognized as a tag rather than a plain # token).
+        listOf("#re  \"^\\d+${'$'}\"", "#re\t\"^\\d+${'$'}\"", "#re\"^\\d+${'$'}\"").forEach { literal ->
+            val errors = errorDescriptions(
+                """
+                ${'$'}version: "2.0"
+
+                metadata foo = $literal
+
+                namespace example
+                """.trimIndent()
+            )
+            assertTrue(
+                "expected [$literal] to be recognized as a tagged literal, got: $errors",
+                errors.any { it.contains("Tagged string literals require") }
+            )
+        }
     }
 
     @Test
@@ -162,5 +185,35 @@ class SmithyTaggedLiteralAnnotatorTest : BasePlatformTestCase() {
             namespace example
             """.trimIndent()
         )
+    }
+
+    private fun taggedString(text: String): SmithyTaggedString {
+        myFixture.configureByText("test.smithy", text)
+        return PsiTreeUtil.collectElementsOfType(myFixture.file, SmithyTaggedString::class.java).single()
+    }
+
+    @Test
+    fun testAsStringReturnsRawContentForQuotedString() {
+        //"\d" is not a valid plain-string escape; the standard asString() would null/mangle it. A tagged literal must
+        //return the raw inner content verbatim (no escape processing), since #re takes backslashes literally.
+        val tagged = taggedString(
+            """
+            ${'$'}version: "2.1"
+
+            metadata foo = #re "^\d{5}${'$'}"
+
+            namespace example
+            """.trimIndent()
+        )
+        assertEquals("^\\d{5}${'$'}", tagged.asString())
+        assertEquals("re", tagged.tag)
+    }
+
+    @Test
+    fun testAsStringReturnsRawContentForTextBlock() {
+        val tagged = taggedString(
+            "\$version: \"2.1\"\n\nmetadata foo = #re \"\"\"\n^\\d{5}${'$'}\n\"\"\"\n\nnamespace example"
+        )
+        assertEquals("^\\d{5}${'$'}\n", tagged.asString())
     }
 }

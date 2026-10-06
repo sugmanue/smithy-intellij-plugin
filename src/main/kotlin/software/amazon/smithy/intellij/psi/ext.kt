@@ -986,8 +986,23 @@ interface SmithyTaggedStringExt : SmithyCharSequence {
 
 abstract class SmithyTaggedStringMixin(node: ASTNode) : SmithyPrimitiveImpl(node), SmithyTaggedString {
     override val tag: String get() = firstChild.text.removePrefix("#").trim()
-    //Highlighting only: the tagged literal is treated as a string value carrying the raw (undecoded) content.
-    override fun asString(): String? = content?.asString()
+
+    //Highlighting only: a tagged literal uses tag-specific escape/encoding rules (e.g. #re takes backslashes
+    //literally, #b/#hex decode bytes), so the standard string escape processing in SmithyString/SmithyTextBlock must
+    //NOT be applied to its content - doing so would mangle or null out the value (e.g. "\d" is not a valid plain-string
+    //escape). We do not decode; asString() returns the raw inner text verbatim, which is the correct value for #re and
+    //a safe, non-mangling best effort for the others.
+    override fun asString(): String? {
+        val raw = (content as? PsiElement)?.text ?: return null
+        return when {
+            raw.startsWith("\"\"\"") && raw.endsWith("\"\"\"") && raw.length >= 6 -> {
+                //Text block: drop the opening """ (and the required leading newline) and the closing """.
+                raw.substring(3, raw.length - 3).removePrefix("\r\n").removePrefix("\n")
+            }
+            raw.startsWith("\"") && raw.endsWith("\"") && raw.length >= 2 -> raw.substring(1, raw.length - 1)
+            else -> raw
+        }
+    }
 }
 
 interface SmithyStructureExt : SmithyContainerShape {

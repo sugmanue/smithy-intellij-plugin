@@ -34,7 +34,7 @@ TOKEN_STRING=\"((\\['bfnrt/\"\\])|(\\u[0-9A-Fa-f]{4})|(\\?[ \t!#-\[\]-\U10FFFF])
 TOKEN_TEXT_BLOCK=\"\"\"\n((\"[^\"])|(\"\"[^\"])|(\\['bfnrt/\"\\])|(\\u[0-9A-Fa-f]{4})|(\\?[ \t!#-\[\]-\U10FFFF])|(\\[\"]{3})|(\\?\r?\n))*\"\"\"
 //Tagged string literal prefix (IDL 2.1), e.g. #re, #b, #hex, #timestamp. Only recognized when followed by a
 //string/text-block (via JFlex trailing context in the rule) so shape-id fragments like "foo#region" are unaffected.
-TOKEN_TAG=#(re|b|hex|timestamp)[ ]?
+TOKEN_TAG=#(re|b|hex|timestamp)[ \t]*
 TOKEN_LINE_COMMENT=("//")|("//"[^/\n][\t -\U10FFFF]*)
 TOKEN_DOCUMENTATION_LINE="///"[\t -\U10FFFF]*
 TOKEN_INCOMPLETE_STRING=\"((\\['bfnrt/\"\\])|(\\u[0-9A-Fa-f]{4})|(\\?[ \t!#-\[\]-\U10FFFF]))+

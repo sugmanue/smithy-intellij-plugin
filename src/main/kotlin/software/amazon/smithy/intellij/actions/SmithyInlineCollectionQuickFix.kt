@@ -12,11 +12,15 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.util.indexing.FileBasedIndex
 import software.amazon.smithy.intellij.SmithyElementFactory
 import software.amazon.smithy.intellij.SmithyFile
+import software.amazon.smithy.intellij.SmithyVersion
 import software.amazon.smithy.intellij.index.SmithyShapeNameResolutionHintIndex
 import software.amazon.smithy.intellij.psi.SmithyContainerMember
+import software.amazon.smithy.intellij.psi.SmithyDefinition
 import software.amazon.smithy.intellij.psi.SmithyMemberTarget
 import software.amazon.smithy.intellij.psi.SmithyShape
 import software.amazon.smithy.intellij.psi.SmithyShapeDefinition
+import software.amazon.smithy.intellij.psi.SmithyStructure
+import software.amazon.smithy.intellij.psi.SmithySyntheticTrait
 import software.amazon.smithy.intellij.psi.SmithyShapeId
 
 /**
@@ -49,6 +53,9 @@ class SmithyInlineCollectionQuickFix(private val shape: SmithyShapeDefinition) :
         val inlineText = inlineText(shape) ?: return
         //A single project scan (on explicit invocation) classifies every reference to this shape.
         val refs = findReferences(shape)
+        //If any referencing member is bound to a resource property/identifier, inlining would break that binding, so
+        //refuse the whole conversion rather than partially rewrite.
+        if (refs.hasResourceBound) return
         WriteCommandAction.runWriteCommandAction(project) {
             refs.members.forEach { member ->
                 PsiTreeUtil.getChildOfType(member, SmithyMemberTarget::class.java)
@@ -59,7 +66,11 @@ class SmithyInlineCollectionQuickFix(private val shape: SmithyShapeDefinition) :
         }
     }
 
-    private data class References(val members: List<SmithyContainerMember>, val hasOther: Boolean)
+    private data class References(
+        val members: List<SmithyContainerMember>,
+        val hasOther: Boolean,
+        val hasResourceBound: Boolean
+    )
 
     companion object {
         /**
@@ -71,29 +82,51 @@ class SmithyInlineCollectionQuickFix(private val shape: SmithyShapeDefinition) :
          * deletion is deferred to [invoke], which runs only when the user applies the fix.
          */
         fun eligibleTarget(member: SmithyContainerMember): SmithyShapeDefinition? {
+            //Inline collections are an IDL 2.1 feature; do not offer the conversion in older files.
+            val version = (member.containingFile as? SmithyFile)?.model?.version
+            if (version == null || SmithyVersion.compare(version, "2.1") < 0) return null
             //After the IDL 2.1 broadening, declaredTarget is a member_target wrapper; unwrap to the underlying id.
             val memberTarget = member.declaredTarget as? SmithyMemberTarget ?: return null
             val target = memberTarget.target as? SmithyShapeId ?: return null //already inline, or not a plain id
             val shape = target.resolve() ?: return null
             if (!isConvertible(shape)) return null
+            //A member bound to a resource property/identifier must keep targeting the declared shape.
+            if (isResourceBound(member)) return null
             //The synthetic shape lands in the member's namespace, so inlining a shape from another namespace would move
             //it; only offer when the collection shares the enclosing structure's namespace.
             if (shape.namespace != member.enclosingShape.namespace) return null
             return shape
         }
 
+        /**
+         * True when [member] is bound to a resource property or identifier via its enclosing `structure ... for R`.
+         * Inlining such a member retargets it to a synthetic shape and would no longer match the resource's declared
+         * property/identifier type, so the conversion must be refused.
+         */
+        private fun isResourceBound(member: SmithyContainerMember): Boolean {
+            val resource = (member.enclosingShape as? SmithyStructure)?.resource?.resolve() ?: return false
+            return resource.getProperty(member.name) != null || resource.getIdentifier(member.name) != null
+        }
+
         private fun isConvertible(shape: SmithyShapeDefinition): Boolean {
             if (shape !is SmithyShape) return false //must be a real IDL shape we can edit/delete
             if (shape.type != "list" && shape.type != "map") return false
-            if (shape.declaredTraits.isNotEmpty()) return false //shape-level traits cannot be expressed inline
-            //member/key/value must be plain, trait-free targets.
+            //Shape-level traits cannot be expressed inline. Use the resolved trait list (not just declaredTraits) so
+            //traits applied via a separate `apply` statement or inherited from a mixin are not silently dropped.
+            if (hasBlockingTrait(shape)) return false
+            //member/key/value must be plain targets without blocking traits.
             val memberNames = if (shape.type == "list") listOf("member") else listOf("key", "value")
             return memberNames.all { name ->
                 val m = shape.getMember(name)
                 val mTarget = (m?.declaredTarget as? SmithyMemberTarget)?.target
-                m != null && m.declaredTraits.isEmpty() && mTarget is SmithyShapeId
+                m != null && !hasBlockingTrait(m) && mTarget is SmithyShapeId
             }
         }
+
+        //A trait blocks inlining unless it is purely synthetic (e.g. a documentation trait derived from a doc comment),
+        //which carries no information that inline syntax cannot already preserve.
+        private fun hasBlockingTrait(definition: SmithyDefinition): Boolean =
+            definition.traits.any { it !is SmithySyntheticTrait }
 
         /**
          * Scans the project once and classifies every reference to [shape]: the members whose target is the shape (to
@@ -107,6 +140,7 @@ class SmithyInlineCollectionQuickFix(private val shape: SmithyShapeDefinition) :
             val simpleName = shape.shapeName
             val members = mutableListOf<SmithyContainerMember>()
             var hasOther = false
+            var hasResourceBound = false
             //Only inspect files that actually mention the shape's simple name (via the shape-hint index), rather than
             //scanning every file in the project.
             val psiManager = PsiManager.getInstance(shape.project)
@@ -122,13 +156,14 @@ class SmithyInlineCollectionQuickFix(private val shape: SmithyShapeDefinition) :
                                 (owningMember.declaredTarget as? SmithyMemberTarget)?.target === id
                             ) {
                                 members += owningMember
+                                if (isResourceBound(owningMember)) hasResourceBound = true
                             } else {
                                 hasOther = true
                             }
                         }
                     }
                 }
-            return References(members, hasOther)
+            return References(members, hasOther, hasResourceBound)
         }
 
         private fun inlineText(shape: SmithyShapeDefinition): String? {

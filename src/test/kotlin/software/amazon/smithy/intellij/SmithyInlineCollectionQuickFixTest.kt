@@ -15,6 +15,68 @@ class SmithyInlineCollectionQuickFixTest : BasePlatformTestCase() {
     }
 
     @Test
+    fun testOnlyRewritesTheExactShapeNotSameNamedShapeInOtherNamespace() {
+        //A different shape with the same simple name exists (and is used) in another namespace. The conversion must
+        //only rewrite references to the exact shape being inlined and must not delete or touch the other one.
+        myFixture.addFileToProject(
+            "other.smithy",
+            """
+            namespace other.ns
+
+            list StringList {
+                member: String
+            }
+
+            structure OtherUser {
+                names: StringList
+            }
+
+            string String
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "test.smithy",
+            """
+            ${'$'}version: "2.1"
+
+            namespace example
+
+            structure Foo {
+                names<caret>: StringList
+            }
+
+            list StringList {
+                member: String
+            }
+
+            string String
+            """.trimIndent()
+        )
+        myFixture.launchAction(myFixture.findSingleIntention("Inline collection 'StringList'"))
+        //example#StringList is inlined and removed; other.ns#StringList and its usage are untouched.
+        myFixture.checkResult(
+            """
+            ${'$'}version: "2.1"
+
+            namespace example
+
+            structure Foo {
+                names: [String]
+            }
+
+            string String
+            """.trimIndent()
+        )
+        assertEquals(
+            "other.ns#StringList must be untouched",
+            "namespace other.ns\n\nlist StringList {\n    member: String\n}\n\nstructure OtherUser {\n    names: StringList\n}\n\nstring String",
+            myFixture.findFileInTempDir("other.smithy").let {
+                com.intellij.psi.PsiManager.getInstance(project).findFile(it)!!.text
+            }
+        )
+    }
+
+    @Test
     fun testConvertsListAndRemovesShape() {
         myFixture.configureByText(
             "test.smithy",
@@ -234,6 +296,72 @@ class SmithyInlineCollectionQuickFixTest : BasePlatformTestCase() {
                 structure Foo {
                     names: StringList
                 }
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
+    fun testNotOfferedWhenTraitAppliedViaApply() {
+        //A trait applied through a separate `apply` statement is not in declaredTraits; it must still block inlining.
+        assertFalse(
+            suggestionOffered(
+                """
+                ${'$'}version: "2.1"
+
+                namespace example
+
+                structure Foo {
+                    names: StringList
+                }
+
+                list StringList {
+                    member: String
+                }
+
+                apply StringList @sparse
+
+                string String
+
+                @trait
+                structure sparse {}
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
+    fun testNotOfferedWhenMemberBoundToResourceProperty() {
+        //Inlining a member bound to a resource property would retarget it away from the property's declared shape.
+        assertFalse(
+            suggestionOffered(
+                """
+                ${'$'}version: "2.1"
+
+                namespace example
+
+                resource R {
+                    properties: { names: StringList }
+                    read: Read
+                }
+
+                @readonly
+                operation Read {
+                    output: Foo
+                }
+
+                structure Foo for R {
+                    names: StringList
+                }
+
+                list StringList {
+                    member: String
+                }
+
+                string String
+
+                @trait
+                structure readonly {}
                 """.trimIndent()
             )
         )

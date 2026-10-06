@@ -27,7 +27,7 @@
         TOKEN_AT="@"
         TOKEN_HASH="#"
         //Tagged string literal prefix (IDL 2.1), e.g. #re / #b / #hex / #timestamp
-        TOKEN_TAG="regexp:#(re|b|hex|timestamp)[ ]?"
+        TOKEN_TAG="regexp:#(re|b|hex|timestamp)[ \t]*"
         //Symbols (keywords (not reserved words), identifiers, object keys, etc.)
         TOKEN_APPLY="apply"
         TOKEN_USE="use"

@@ -333,11 +333,10 @@ private enum class Annotation(val sinceVersion: String? = null, val untilVersion
     },
     SIMPLIFY_INLINE_COLLECTION {
         override fun annotate(element: PsiElement, holder: AnnotationHolder) {
-            //Anchor on the member name so the suggestion highlights the member being converted.
+            //Anchor on the member name so the suggestion highlights the member being converted. eligibleTarget also
+            //performs the IDL version check, so the fix is self-guarding wherever it is invoked.
             if (element !is SmithyMemberName) return
             val member = element.parent as? SmithyContainerMember ?: return
-            val version = (element.containingFile as? SmithyFile)?.model?.version
-            if (version == null || SmithyVersion.compare(version, "2.1") < 0) return
             val shape = SmithyInlineCollectionQuickFix.eligibleTarget(member) ?: return
             holder.newAnnotation(INFORMATION, "Convert '${shape.shapeName}' to an inline collection")
                 .highlightType(ProblemHighlightType.WEAK_WARNING)
